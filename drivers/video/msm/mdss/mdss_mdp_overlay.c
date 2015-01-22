@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -302,8 +302,8 @@ int mdss_mdp_overlay_req_check(struct msm_fb_data_type *mfd,
 			dst_h = req->dst_rect.h;
 		}
 
-		src_w = req->src_rect.w >> req->horz_deci;
-		src_h = req->src_rect.h >> req->vert_deci;
+		src_w = DECIMATED_DIMENSION(req->src_rect.w, req->horz_deci);
+		src_h = DECIMATED_DIMENSION(req->src_rect.h, req->vert_deci);
 
 		if (src_w > MAX_MIXER_WIDTH) {
 			pr_err("invalid source width=%d HDec=%d\n",
@@ -418,15 +418,97 @@ static int __mdp_pipe_tune_perf(struct mdss_mdp_pipe *pipe,
 	return 0;
 }
 
+static int __mdss_mdp_validate_pxl_extn(struct mdss_mdp_pipe *pipe)
+{
+	int plane;
+
+	for (plane = 0; plane < MAX_PLANES; plane++) {
+		u32 hor_req_pixels, hor_fetch_pixels;
+		u32 hor_ov_fetch, vert_ov_fetch;
+		u32 vert_req_pixels, vert_fetch_pixels;
+		u32 src_w = DECIMATED_DIMENSION(pipe->src.w, pipe->horz_deci);
+		u32 src_h = DECIMATED_DIMENSION(pipe->src.h, pipe->vert_deci);
+
+		/*
+		 * plane 1 and 2 are for chroma and are same. While configuring
+		 * HW, programming only one of the chroma components is
+		 * sufficient.
+		 */
+		if (plane == 2)
+			continue;
+
+		/*
+		 * For chroma plane, width is half for the following sub sampled
+		 * formats
+		 */
+		if (plane == 1 &&
+		    ((pipe->src_fmt->chroma_sample == MDSS_MDP_CHROMA_420) ||
+		     (pipe->src_fmt->chroma_sample == MDSS_MDP_CHROMA_H2V1)))
+			src_w >>= 1;
+
+		if (plane == 1 &&
+		    ((pipe->src_fmt->chroma_sample == MDSS_MDP_CHROMA_420) ||
+		     (pipe->src_fmt->chroma_sample == MDSS_MDP_CHROMA_H1V2)))
+			src_h >>= 1;
+
+		hor_req_pixels = pipe->scale.roi_w[plane] +
+			pipe->scale.num_ext_pxls_left[plane] +
+			pipe->scale.num_ext_pxls_right[plane];
+
+		hor_fetch_pixels = src_w +
+			(pipe->scale.left_ftch[plane] >> pipe->horz_deci) +
+			pipe->scale.left_rpt[plane] +
+			(pipe->scale.right_ftch[plane] >> pipe->horz_deci) +
+			pipe->scale.right_rpt[plane];
+
+		hor_ov_fetch = src_w +
+			(pipe->scale.left_ftch[plane] >> pipe->horz_deci)+
+			(pipe->scale.right_ftch[plane] >> pipe->horz_deci);
+
+		vert_req_pixels = pipe->scale.num_ext_pxls_top[plane] +
+			pipe->scale.num_ext_pxls_btm[plane];
+
+		vert_fetch_pixels =
+			(pipe->scale.top_ftch[plane] >> pipe->vert_deci) +
+			pipe->scale.top_rpt[plane] +
+			(pipe->scale.btm_ftch[plane] >> pipe->vert_deci)+
+			pipe->scale.btm_rpt[plane];
+
+		vert_ov_fetch = src_h +
+			(pipe->scale.top_ftch[plane] >> pipe->vert_deci)+
+			(pipe->scale.btm_ftch[plane] >> pipe->vert_deci);
+
+		if ((hor_req_pixels != hor_fetch_pixels) ||
+			(hor_ov_fetch > pipe->img_width) ||
+			(vert_req_pixels != vert_fetch_pixels) ||
+			(vert_ov_fetch > pipe->img_height)) {
+			pr_err("err: plane=%d h_req:%d h_fetch:%d v_req:%d v_fetch:%d\n",
+					plane,
+					hor_req_pixels, hor_fetch_pixels,
+					vert_req_pixels, vert_fetch_pixels);
+			pr_err("roi_w[%d]=%d, src_img:[%d, %d]\n",
+					plane, pipe->scale.roi_w[plane],
+					pipe->img_width, pipe->img_height);
+			pipe->scale.enable_pxl_ext = 0;
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 static int __mdss_mdp_overlay_setup_scaling(struct mdss_mdp_pipe *pipe)
 {
 	u32 src;
 	int rc;
 
-	src = pipe->src.w >> pipe->horz_deci;
+	src = DECIMATED_DIMENSION(pipe->src.w, pipe->horz_deci);
 
-	if (pipe->scale.enable_pxl_ext)
-		return 0;
+	if (pipe->scale.enable_pxl_ext) {
+		rc = __mdss_mdp_validate_pxl_extn(pipe);
+		return rc;
+	}
+
 	memset(&pipe->scale, 0, sizeof(struct mdp_scale_data));
 	rc = mdss_mdp_calc_phase_step(src, pipe->dst.w,
 			&pipe->scale.phase_step_x[0]);
@@ -439,17 +521,19 @@ static int __mdss_mdp_overlay_setup_scaling(struct mdss_mdp_pipe *pipe)
 		return rc;
 	}
 
-	src = pipe->src.h >> pipe->vert_deci;
+	src = DECIMATED_DIMENSION(pipe->src.h, pipe->vert_deci);
 	rc = mdss_mdp_calc_phase_step(src, pipe->dst.h,
 			&pipe->scale.phase_step_y[0]);
 
 	if ((rc == -EOVERFLOW) && (pipe->type == MDSS_MDP_PIPE_TYPE_VIG)) {
 		/* overflow on Qseed2 scaler is acceptable */
 		rc = 0;
+	} else if (rc == -EOVERFLOW) {
+		/* overflow expected and should fallback to GPU */
+		rc = -ECANCELED;
 	} else if (rc) {
 		pr_err("Vertical scaling calculation failed=%d! %d->%d\n",
 				rc, src, pipe->dst.h);
-		return rc;
 	}
 	return rc;
 }
@@ -598,7 +682,7 @@ int mdss_mdp_overlay_pipe_setup(struct msm_fb_data_type *mfd,
 		}
 
 		if (pipe == NULL) {
-			pr_err("error allocating pipe. flags=0x%x\n",
+			pr_err_ratelimited("error allocating pipe. flags=0x%x\n",
 				req->flags);
 			return -ENODEV;
 		}
@@ -759,6 +843,7 @@ int mdss_mdp_overlay_pipe_setup(struct msm_fb_data_type *mfd,
 	req->priority = pipe->priority;
 	pipe->req_data = *req;
 
+	mdss_mdp_pipe_sspp_term(pipe);
 	if (pipe->flags & MDP_OVERLAY_PP_CFG_EN) {
 		memcpy(&pipe->pp_cfg, &req->overlay_pp_cfg,
 					sizeof(struct mdp_overlay_pp_params));
@@ -1014,6 +1099,10 @@ static void mdss_mdp_overlay_cleanup(struct msm_fb_data_type *mfd)
 			__mdss_mdp_overlay_free_list_add(mfd, &pipe->front_buf);
 		mdss_mdp_data_free(&pipe->back_buf);
 		list_del_init(&pipe->list);
+		if (recovery_mode) {
+			mdss_mdp_mixer_pipe_unstage(pipe, pipe->mixer_left);
+			mdss_mdp_mixer_pipe_unstage(pipe, pipe->mixer_right);
+		}
 		mdss_mdp_pipe_destroy(pipe);
 	}
 	mutex_unlock(&mdp5_data->list_lock);
