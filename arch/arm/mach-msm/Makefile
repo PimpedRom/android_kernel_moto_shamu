@@ -137,3 +137,8 @@ obj-$(CONFIG_ARCH_RANDOM) += early_random.o
 obj-$(CONFIG_PERFMAP) += perfmap.o
 obj-$(CONFIG_MMI_UNIT_INFO) += mmi-unit-info.o
 obj-$(CONFIG_MMI_SOC_INFO) += mmi_soc_info.o
+<<<<<<< HEAD
+=======
+obj-$(CONFIG_LCD_KCAL) += shamu_kcal_ctrl.o
+obj-$(CONFIG_FORCE_FAST_CHARGE) += fastchg.o
+>>>>>>> f41a7a4... fast charge: initial adaptation for Shamu to work with qcom's quick charge 2.0
