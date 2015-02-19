@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1059,6 +1059,7 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 	struct mdss_data_type *mdata;
 	u32 src_w, src_h;
 	u32 dcm_state = DCM_UNINIT;
+	u32 chroma_shift_x = 0, chroma_shift_y = 0;
 
 	pr_debug("pipe=%d, change pxl ext=%d\n", pipe->num,
 			pipe->scale.enable_pxl_ext);
@@ -1084,8 +1085,8 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 		}
 	}
 
-	src_w = pipe->src.w >> pipe->horz_deci;
-	src_h = pipe->src.h >> pipe->vert_deci;
+	src_w = DECIMATED_DIMENSION(pipe->src.w, pipe->horz_deci);
+	src_h = DECIMATED_DIMENSION(pipe->src.h, pipe->vert_deci);
 
 	chroma_sample = pipe->src_fmt->chroma_sample;
 	if (pipe->flags & MDP_SOURCE_ROTATED_90) {
@@ -1114,7 +1115,8 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 	}
 
 	if ((src_h != pipe->dst.h) ||
-	    (pipe->pp_res.pp_sts.sharp_sts & PP_STS_ENABLE) ||
+	    (pipe->src_fmt->is_yuv &&
+			(pipe->pp_res.pp_sts.sharp_sts & PP_STS_ENABLE)) ||
 	    (chroma_sample == MDSS_MDP_CHROMA_420) ||
 	    (chroma_sample == MDSS_MDP_CHROMA_H1V2) ||
 	    (pipe->scale.enable_pxl_ext && (src_h != pipe->dst.h))) {
@@ -1131,11 +1133,10 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 		init_phasey = pipe->scale.init_phase_y[0];
 
 		if (pipe->type == MDSS_MDP_PIPE_TYPE_VIG) {
-			u32 chroma_shift = 0;
 			if (!pipe->vert_deci &&
 			    ((chroma_sample == MDSS_MDP_CHROMA_420) ||
 			    (chroma_sample == MDSS_MDP_CHROMA_H1V2)))
-				chroma_shift = 1; /* 2x upsample chroma */
+				chroma_shift_y = 1; /* 2x upsample chroma */
 
 			if (src_h <= pipe->dst.h)
 				scale_config |= /* G/Y, A */
@@ -1146,7 +1147,7 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 					(MDSS_MDP_SCALE_FILTER_PCMN << 10) |
 					(MDSS_MDP_SCALE_FILTER_PCMN << 18);
 
-			if ((src_h >> chroma_shift) <= pipe->dst.h)
+			if ((src_h >> chroma_shift_y) <= pipe->dst.h)
 				scale_config |= /* CrCb */
 					(MDSS_MDP_SCALE_FILTER_BIL << 14);
 			else
@@ -1155,7 +1156,8 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 
 			writel_relaxed(init_phasey, pipe->base +
 				MDSS_MDP_REG_VIG_QSEED2_C12_INIT_PHASEY);
-			writel_relaxed(phasey_step >> chroma_shift, pipe->base +
+			writel_relaxed(phasey_step >> chroma_shift_y,
+				pipe->base +
 				MDSS_MDP_REG_VIG_QSEED2_C12_PHASESTEPY);
 		} else {
 			if (src_h <= pipe->dst.h)
@@ -1170,7 +1172,8 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 	}
 
 	if ((src_w != pipe->dst.w) ||
-	    (pipe->pp_res.pp_sts.sharp_sts & PP_STS_ENABLE) ||
+	    (pipe->src_fmt->is_yuv &&
+			(pipe->pp_res.pp_sts.sharp_sts & PP_STS_ENABLE)) ||
 	    (chroma_sample == MDSS_MDP_CHROMA_420) ||
 	    (chroma_sample == MDSS_MDP_CHROMA_H2V1) ||
 	    (pipe->scale.enable_pxl_ext && (src_w != pipe->dst.w))) {
@@ -1187,12 +1190,10 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 		phasex_step = pipe->scale.phase_step_x[0];
 
 		if (pipe->type == MDSS_MDP_PIPE_TYPE_VIG) {
-			u32 chroma_shift = 0;
-
 			if (!pipe->horz_deci &&
 			    ((chroma_sample == MDSS_MDP_CHROMA_420) ||
 			    (chroma_sample == MDSS_MDP_CHROMA_H2V1)))
-				chroma_shift = 1; /* 2x upsample chroma */
+				chroma_shift_x = 1; /* 2x upsample chroma */
 
 			if (src_w <= pipe->dst.w)
 				scale_config |= /* G/Y, A */
@@ -1203,7 +1204,7 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 					(MDSS_MDP_SCALE_FILTER_PCMN << 8) |
 					(MDSS_MDP_SCALE_FILTER_PCMN << 16);
 
-			if ((src_w >> chroma_shift) <= pipe->dst.w)
+			if ((src_w >> chroma_shift_x) <= pipe->dst.w)
 				scale_config |= /* CrCb */
 					(MDSS_MDP_SCALE_FILTER_BIL << 12);
 			else
@@ -1212,7 +1213,8 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 
 			writel_relaxed(init_phasex, pipe->base +
 				MDSS_MDP_REG_VIG_QSEED2_C12_INIT_PHASEX);
-			writel_relaxed(phasex_step >> chroma_shift, pipe->base +
+			writel_relaxed(phasex_step >> chroma_shift_x,
+				pipe->base +
 				MDSS_MDP_REG_VIG_QSEED2_C12_PHASESTEPX);
 		} else {
 			if (src_w <= pipe->dst.w)
@@ -1272,10 +1274,48 @@ static int mdss_mdp_scale_setup(struct mdss_mdp_pipe *pipe)
 		/*program pixel extn values for the SSPP*/
 		mdss_mdp_pipe_program_pixel_extn(pipe);
 	} else {
-		writel_relaxed(phasex_step, pipe->base +
-		   MDSS_MDP_REG_SCALE_PHASE_STEP_X);
-		writel_relaxed(phasey_step, pipe->base +
-		   MDSS_MDP_REG_SCALE_PHASE_STEP_Y);
+		if (pipe->type == MDSS_MDP_PIPE_TYPE_VIG) {
+			/*program x,y initial phase and phase step*/
+			writel_relaxed(0,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C03_INIT_PHASEX);
+			writel_relaxed(init_phasex,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C12_INIT_PHASEX);
+			writel_relaxed(phasex_step,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C03_PHASESTEPX);
+			writel_relaxed(phasex_step >> chroma_shift_x,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C12_PHASESTEPX);
+
+			writel_relaxed(0,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C03_INIT_PHASEY);
+			writel_relaxed(init_phasey,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C12_INIT_PHASEY);
+			writel_relaxed(phasey_step,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C03_PHASESTEPY);
+			writel_relaxed(phasey_step >> chroma_shift_y,
+				pipe->base +
+				MDSS_MDP_REG_VIG_QSEED2_C12_PHASESTEPY);
+		} else {
+
+			writel_relaxed(phasex_step,
+				pipe->base +
+				MDSS_MDP_REG_SCALE_PHASE_STEP_X);
+			writel_relaxed(phasey_step,
+				pipe->base +
+				MDSS_MDP_REG_SCALE_PHASE_STEP_Y);
+			writel_relaxed(0,
+				pipe->base +
+				MDSS_MDP_REG_SCALE_INIT_PHASE_X);
+			writel_relaxed(0,
+				pipe->base +
+				MDSS_MDP_REG_SCALE_INIT_PHASE_Y);
+		}
 	}
 
 	writel_relaxed(scale_config, pipe->base +
@@ -1930,6 +1970,10 @@ int mdss_mdp_pp_resume(struct mdss_mdp_ctl *ctl, u32 dspp_num)
 			mdss_pp_res->gamut_disp_cfg[disp_num].flags |=
 				MDP_PP_OPS_WRITE;
 	}
+
+	if (!disp_num)
+		pp_sts.pgc_sts |= PP_STS_ENABLE;
+
 	if (pp_sts.pgc_sts & PP_STS_ENABLE) {
 		flags |= PP_FLAGS_DIRTY_PGC;
 		if (!(mdss_pp_res->pgc_disp_cfg[disp_num].flags
@@ -1942,64 +1986,62 @@ int mdss_mdp_pp_resume(struct mdss_mdp_ctl *ctl, u32 dspp_num)
 	return 0;
 }
 
-void mdss_mdp_pp_kcal_update(struct kcal_lut_data *lut_data)
+void mdss_mdp_pp_kcal_enable(bool enable)
 {
-	u32 copyback = 0;
-	struct mdp_pcc_cfg_data pcc_config;
+	u32 disp_num = 0;
+	struct mdp_pgc_lut_data *pgc_config;
 
-	memset(&pcc_config, 0, sizeof(struct mdp_pcc_cfg_data));
+	pgc_config = &mdss_pp_res->pgc_disp_cfg[disp_num];
+	pgc_config->block = MDP_LOGICAL_BLOCK_DISP_0;
 
-	pcc_config.block = MDP_LOGICAL_BLOCK_DISP_0;
-	pcc_config.ops = lut_data->enable ? MDP_PP_OPS_WRITE | MDP_PP_OPS_ENABLE :
-		MDP_PP_OPS_WRITE | MDP_PP_OPS_DISABLE;
-	pcc_config.r.r = lut_data->red * PCC_ADJ;
-	pcc_config.g.g = lut_data->green * PCC_ADJ;
-	pcc_config.b.b = lut_data->blue * PCC_ADJ;
+	if (enable) {
+		pgc_config->flags = MDP_PP_OPS_WRITE | MDP_PP_OPS_ENABLE;
+		pgc_config->r_data = &mdss_pp_res->gc_lut_r[disp_num][0];
+		pgc_config->g_data = &mdss_pp_res->gc_lut_g[disp_num][0];
+		pgc_config->b_data = &mdss_pp_res->gc_lut_b[disp_num][0];
+	} else
+		pgc_config->flags = MDP_PP_OPS_WRITE | MDP_PP_OPS_DISABLE;
 
-	mdss_mdp_pcc_config(&pcc_config, &copyback);
+	mdss_pp_res->pgc_disp_cfg[disp_num] = *pgc_config;
+	mdss_pp_res->pp_disp_flags[disp_num] |= PP_FLAGS_DIRTY_PGC;
+}
+
+void mdss_mdp_pp_kcal_update(int kr, int kg, int kb)
+{
+	int i;
+	u32 disp_num = 0;
+	struct mdp_pgc_lut_data *pgc_config;
+
+	pgc_config = &mdss_pp_res->pgc_disp_cfg[disp_num];
+
+	for (i = 0; i < GC_LUT_SEGMENTS; i++) {
+		pgc_config->r_data[i].slope = kr;
+		pgc_config->g_data[i].slope = kg;
+		pgc_config->b_data[i].slope = kb;
+	}
+
+	mdss_pp_res->pgc_disp_cfg[disp_num] = *pgc_config;
+	mdss_pp_res->pp_disp_flags[disp_num] |= PP_FLAGS_DIRTY_PGC;
 }
 
 void mdss_mdp_pp_kcal_pa(struct kcal_lut_data *lut_data)
 {
 	u32 copyback = 0;
 	struct mdp_pa_cfg_data pa_config;
-	struct mdp_pa_v2_cfg_data pa_v2_config;
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 
-	if (mdata->mdp_rev < MDSS_MDP_HW_REV_103) {
-		memset(&pa_config, 0, sizeof(struct mdp_pa_cfg_data));
+	memset(&pa_config, 0, sizeof(struct mdp_pa_cfg_data));
 
-		pa_config.block = MDP_LOGICAL_BLOCK_DISP_0;
-		pa_config.pa_data.flags = MDP_PP_OPS_WRITE | MDP_PP_OPS_ENABLE;
-		pa_config.pa_data.hue_adj = lut_data->hue;
-		pa_config.pa_data.sat_adj = lut_data->sat;
-		pa_config.pa_data.val_adj = lut_data->val;
-		pa_config.pa_data.cont_adj = lut_data->cont;
+	pa_config.block = MDP_LOGICAL_BLOCK_DISP_0;
+	pa_config.pa_data.flags = MDP_PP_OPS_WRITE | MDP_PP_OPS_ENABLE;
+	pa_config.pa_data.sat_adj = lut_data->sat;
+	pa_config.pa_data.hue_adj = lut_data->hue;
+	pa_config.pa_data.val_adj = lut_data->val;
+	pa_config.pa_data.cont_adj = lut_data->cont;
 
-		mdss_mdp_pa_config(&pa_config, &copyback);
-	} else {
-		memset(&pa_v2_config, 0, sizeof(struct mdp_pa_v2_cfg_data));
-
-		pa_v2_config.block = MDP_LOGICAL_BLOCK_DISP_0;
-		pa_v2_config.pa_v2_data.flags = MDP_PP_OPS_WRITE | MDP_PP_OPS_ENABLE;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_HUE_ENABLE;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_HUE_MASK;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_SAT_ENABLE;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_SAT_MASK;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_VAL_ENABLE;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_VAL_MASK;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_CONT_ENABLE;
-		pa_v2_config.pa_v2_data.flags |= MDP_PP_PA_CONT_MASK;
-		pa_v2_config.pa_v2_data.global_hue_adj = lut_data->hue;
-		pa_v2_config.pa_v2_data.global_sat_adj = lut_data->sat;
-		pa_v2_config.pa_v2_data.global_val_adj = lut_data->val;
-		pa_v2_config.pa_v2_data.global_cont_adj = lut_data->cont;
-
-		mdss_mdp_pa_v2_config(&pa_v2_config, &copyback);
-	}
+	mdss_mdp_pa_config(&pa_config, &copyback);
 }
 
-void mdss_mdp_pp_kcal_invert(struct kcal_lut_data *lut_data)
+void mdss_mdp_pp_kcal_invert(int enable)
 {
 	int i;
 	u32 disp_num = 0, copyback = 0, copy_from_kernel = 1;
@@ -2014,7 +2056,7 @@ void mdss_mdp_pp_kcal_invert(struct kcal_lut_data *lut_data)
 	igc_config->block = MDP_LOGICAL_BLOCK_DISP_0;
 	igc_config->len = IGC_LUT_ENTRIES;
 
-	if (igc_mfd && lut_data->invert) {
+	if (igc_mfd && enable) {
 		igc_config->ops = MDP_PP_OPS_WRITE | MDP_PP_OPS_ENABLE;
 		for (i = 0; i < IGC_LUT_ENTRIES; i++) {
 			igc_c0_c1[i] = (igc_Table_RGB[i] & 0xfff) |
@@ -2023,7 +2065,7 @@ void mdss_mdp_pp_kcal_invert(struct kcal_lut_data *lut_data)
 		}
 		igc_config->c0_c1_data = &igc_c0_c1[0];
 		igc_config->c2_data = &igc_c2[0];
-	} else if (igc_mfd && !lut_data->invert)
+	} else if (igc_mfd && !enable)
 		igc_config->ops = MDP_PP_OPS_WRITE | MDP_PP_OPS_DISABLE;
 	else
 		return;
@@ -2868,17 +2910,11 @@ int mdss_mdp_argc_config(struct mdp_pgc_lut_data *config,
 		argc_addr = mdss_mdp_get_mixer_addr_off(dspp_num) +
 			MDSS_MDP_REG_LM_GC_LUT_BASE;
 		pgc_ptr = &mdss_pp_res->argc_disp_cfg[disp_num];
-		if (config->flags & MDP_PP_OPS_WRITE)
-			mdss_pp_res->pp_disp_flags[disp_num] |=
-				PP_FLAGS_DIRTY_ARGC;
 		break;
 	case MDSS_PP_DSPP_CFG:
 		argc_addr = mdss_mdp_get_dspp_addr_off(dspp_num) +
 					MDSS_MDP_REG_DSPP_GC_BASE;
 		pgc_ptr = &mdss_pp_res->pgc_disp_cfg[disp_num];
-		if (config->flags & MDP_PP_OPS_WRITE)
-			mdss_pp_res->pp_disp_flags[disp_num] |=
-				PP_FLAGS_DIRTY_PGC;
 		break;
 	default:
 		goto argc_config_exit;
@@ -2958,6 +2994,12 @@ int mdss_mdp_argc_config(struct mdp_pgc_lut_data *config,
 			&mdss_pp_res->gc_lut_g[disp_num][0];
 		pgc_ptr->b_data =
 			&mdss_pp_res->gc_lut_b[disp_num][0];
+		if (PP_LOCAT(config->block) == MDSS_PP_LM_CFG)
+			mdss_pp_res->pp_disp_flags[disp_num] |=
+				PP_FLAGS_DIRTY_ARGC;
+		else if (PP_LOCAT(config->block) == MDSS_PP_DSPP_CFG)
+			mdss_pp_res->pp_disp_flags[disp_num] |=
+				PP_FLAGS_DIRTY_PGC;
 	}
 argc_config_exit:
 	mutex_unlock(&mdss_pp_mutex);
