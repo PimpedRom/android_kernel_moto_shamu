@@ -379,9 +379,10 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Wno-format-security \
 		   -fno-delete-null-pointer-checks \
 		   -mtune=cortex-a15 \
-           -fmodulo-sched -fmodulo-sched-allow-regmoves -fno-tree-vectorize -ffast-math \
+           -fmodulo-sched -fmodulo-sched-allow-regmoves -ftree-vectorize -ftree-loop-im -ftree-loop-ivcanon -fivopts -ffast-math -fgcse-sm -fgcse-las -fweb -frename-registers \
            -funswitch-loops -fpredictive-commoning -fgcse-after-reload \
-           -fno-aggressive-loop-optimizations 
+           -faggressive-loop-optimizations \
+           -O3
 
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
